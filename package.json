@@ -1,0 +1,8 @@
+{
+  "name": "seton-website-analysis-tool",
+  "version": "1.0.0",
+  "description": "Parish web quality platform for Diocese of Bridgeport",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}

@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Parish Web Quality Platform — Diocese of Bridgeport</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { font-family: Georgia, serif; background: #f4f2ef; }
+    input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; }
+    input[type=number] { -moz-appearance: textfield; }
+    ::-webkit-scrollbar { width: 6px; } 
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useEffect, useCallback } = React;
+
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const B   = "#1e3a5f";
+const G   = "#c9a961";
+const T   = "#9b8b7e";
+const BG  = "#f4f2ef";
+const W   = "#ffffff";
+
+const CATS      = ["performance","accessibility","best-practices","seo"];
+const CAT_LABEL = { performance:"Performance", accessibility:"Accessibility", "best-practices":"Best Practices", seo:"SEO" };
+const CAT_ICON  = { performance:"⚡", accessibility:"♿", "best-practices":"✅", seo:"🔍" };
+const RUNS = 3;
+
+const GATE = {
+  mobile:  { performance:80, accessibility:90, "best-practices":90, seo:90 },
+  desktop: { performance:90, accessibility:90, "best-practices":90, seo:90 },
+};
+
+const ISSUE_LIBRARY = {
+  performance: {
+    detail: "Large images, render-blocking scripts, and lack of caching slow load times. Parishioners on mobile data plans may abandon before the page loads.",
+  },
+  accessibility: {
+    detail: "Missing alt text, poor color contrast, or unlabeled buttons may exclude parishioners with disabilities and could expose the diocese to ADA compliance risk.",
+  },
+  "best-practices": {
+    detail: "Security headers, HTTPS issues, deprecated APIs, or browser console errors affect trust signals and long-term site maintainability.",
+  },
+  seo: {
+    detail: "Missing meta descriptions, poor heading structure, or missing canonical tags reduce visibility in Google Search — directly affecting how new parishioners find the parish online.",
+  },
+};
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+const scoreColor = n => {
+  if (n === null || n === undefined || n === "") return "#ccc";
+  const v = Number(n);
+  if (v >= 90) return "#0cce6b";
+  if (v >= 50) return "#ffa400";
+  return "#ff4e42";
+};
+
+const avg = vals => {
+  const nums = vals.map(Number).filter(v => !isNaN(v) && v !== "");
+  if (!nums.length) return null;
+  return Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
+};
+
+const emptyRuns  = () => Array(RUNS).fill("");
+const initScores = () => ({
+  mobile:  Object.fromEntries(CATS.map(c => [c, emptyRuns()])),
+  desktop: Object.fromEntries(CATS.map(c => [c, emptyRuns()])),
+});
+const computeAvgs = sc => ({
+  mobile:  Object.fromEntries(CATS.map(c => [c, avg(sc.mobile[c])])),
+  desktop: Object.fromEntries(CATS.map(c => [c, avg(sc.desktop[c])])),
+});
+const gateStatus = avgs => {
+  let pass = 0, fail = 0, pending = 0;
+  for (const s of ["mobile","desktop"]) {
+    for (const c of CATS) {
+      const v = avgs[s][c];
+      if (v === null) { pending++; continue; }
+      v >= GATE[s][c] ? pass++ : fail++;
+    }
+  }
+  return { pass, fail, pending, total: CATS.length * 2 };
+};
+
+// Storage helpers (localStorage for web app)
+const store = {
+  get: key => { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch { return null; } },
+  set: (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} },
+};
+
+// ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
+function Ring({ score, size = 64 }) {
+  const n   = (score === null || score === undefined || score === "") ? null : Number(score);
+  const r   = size / 2 - 5;
+  const c   = 2 * Math.PI * r;
+  const d   = n !== null ? (n / 100) * c : 0;
+  const col = scoreColor(n);
+  return (
+    <svg width={size} height={size} style={{ transform:"rotate(-90deg)", display:"block" }}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#e8e8e8" strokeWidth={5} />
+      {n !== null && <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={col} strokeWidth={5}
+        strokeDasharray={`${d} ${c}`} strokeLinecap="round"
+        style={{ transition:"stroke-dasharray 0.7s ease" }} />}
+      <text x={size/2} y={size/2+1} textAnchor="middle" dominantBaseline="middle"
+        fill={n !== null ? col : "#bbb"} fontSize={size * 0.27} fontWeight="700"
+        style={{ transform:`rotate(90deg)`, transformOrigin:`${size/2}px ${size/2}px` }}>
+        {n !== null ? n : "—"}
+      </text>
+    </svg>
+  );
+}
+
+function PassFail({ pass }) {
+  if (pass === null) return <span style={{ color:"#bbb", fontSize:12 }}>Pending</span>;
+  return (
+    <span style={{
+      display:"inline-block", padding:"3px 10px", borderRadius:20,
+      background: pass ? "#e6faf1" : "#fff0ef",
+      color: pass ? "#0cce6b" : "#ff4e42",
+      fontWeight:800, fontSize:12, letterSpacing:0.5,
+    }}>
+      {pass ? "✓ PASS" : "✗ FAIL"}
+    </span>
+  );
+}
+
+function NavBtn({ label, icon, active, onClick, badge }) {
+  return (
+    <button onClick={onClick} style={{
+      display:"flex", alignItems:"center", gap:10,
+      width:"100%", padding:"11px 16px", border:"none", borderRadius:8,
+      background: active ? "rgba(201,169,97,0.15)" : "transparent",
+      color: active ? G : "rgba(255,255,255,0.7)",
+      fontFamily:"Georgia,serif", fontSize:14, fontWeight: active ? 700 : 400,
+      cursor:"pointer", textAlign:"left",
+      borderLeft: active ? `3px solid ${G}` : "3px solid transparent",
+      transition:"all 0.15s",
+    }}>
+      <span style={{ fontSize:16 }}>{icon}</span>
+      {label}
+      {badge > 0 && (
+        <span style={{
+          marginLeft:"auto", background:"#ff4e42", color:W,
+          borderRadius:10, fontSize:11, fontWeight:700, padding:"1px 7px",
+        }}>{badge}</span>
+      )}
+    </button>
+  );
+}
+
+// ─── SCORE ENTRY ──────────────────────────────────────────────────────────────
+function ScoreEntry({ scores, onChange }) {
+  const [strat, setStrat] = useState("mobile");
+  return (
+    <div>
+      <div style={{ display:"flex", gap:8, marginBottom:20 }}>
+        {["mobile","desktop"].map(s => (
+          <button key={s} onClick={() => setStrat(s)} style={{
+            padding:"7px 18px", borderRadius:7,
+            border:`2px solid ${strat===s ? B : "#ddd"}`,
+            background: strat===s ? B : W,
+            color: strat===s ? W : "#555",
+            fontWeight:700, fontSize:13, cursor:"pointer",
+          }}>
+            {s==="mobile" ? "📱" : "🖥"} {s.charAt(0).toUpperCase()+s.slice(1)}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize:11, color:T, marginBottom:12, fontStyle:"italic" }}>
+        Run each at <a href="https://pagespeed.web.dev" target="_blank" rel="noreferrer" style={{ color:B }}>pagespeed.web.dev</a> 3 times and enter the 4 scores per run.
+      </div>
+      <div style={{ overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, minWidth:500 }}>
+          <thead>
+            <tr>
+              <th style={THS}>Category</th>
+              {Array(RUNS).fill(0).map((_,i) => <th key={i} style={THS}>Run {i+1}</th>)}
+              <th style={{ ...THS, color:G }}>Avg</th>
+              <th style={THS}>Threshold</th>
+              <th style={THS}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {CATS.map((cat,ci) => {
+              const runs = scores[strat][cat];
+              const a    = avg(runs);
+              const thr  = GATE[strat][cat];
+              const pass = a !== null ? a >= thr : null;
+              return (
+                <tr key={cat} style={{ background: ci%2===0 ? "#fafafa" : W }}>
+                  <td style={{ ...TDS, fontWeight:600 }}>{CAT_ICON[cat]} {CAT_LABEL[cat]}</td>
+                  {runs.map((val,ri) => (
+                    <td key={ri} style={TDS}>
+                      <input type="number" min="0" max="100" value={val}
+                        onChange={e => onChange(strat, cat, ri, e.target.value)}
+                        style={{
+                          width:52, padding:"5px 7px", borderRadius:6,
+                          border:`1.5px solid ${val!=="" ? scoreColor(val) : "#ddd"}`,
+                          fontSize:14, fontWeight:700, textAlign:"center",
+                          color: val!=="" ? scoreColor(val) : "#bbb", outline:"none",
+                          fontFamily:"monospace",
+                        }} placeholder="—" />
+                    </td>
+                  ))}
+                  <td style={{ ...TDS, textAlign:"center" }}>
+                    <span style={{ fontWeight:800, color:scoreColor(a), fontSize:16 }}>{a ?? "—"}</span>
+                  </td>
+                  <td style={{ ...TDS, textAlign:"center", color:"#777", fontSize:13 }}>≥ {thr}</td>
+                  <td style={{ ...TDS, textAlign:"center" }}><PassFail pass={pass} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── PRE-LAUNCH GATE ──────────────────────────────────────────────────────────
+function GateView({ site, avgs }) {
+  if (!site) return <Empty msg="Select or add a site to view its pre-launch gate status." />;
+  const status   = gateStatus(avgs);
+  const allPass  = status.fail === 0 && status.pending === 0;
+  const hasFails = status.fail > 0;
+  return (
+    <div>
+      <div style={{ marginBottom:24 }}>
+        <h2 style={{ ...H2, marginBottom:4 }}>Pre-Launch Quality Gate</h2>
+        <p style={{ color:T, fontSize:13, margin:0 }}>{site.label} — all checks must pass before going live</p>
+      </div>
+
+      {/* Verdict */}
+      <div style={{
+        borderRadius:12, padding:"24px 28px", marginBottom:24,
+        background: allPass ? "#e6faf1" : hasFails ? "#fff0ef" : "#f5f3f0",
+        border:`2px solid ${allPass ? "#0cce6b" : hasFails ? "#ff4e42" : "#ddd"}`,
+        display:"flex", alignItems:"center", gap:20,
+      }}>
+        <div style={{ fontSize:48 }}>{allPass ? "🚀" : hasFails ? "🚫" : "⏳"}</div>
+        <div>
+          <div style={{ fontSize:22, fontWeight:800, color: allPass ? "#0cce6b" : hasFails ? "#ff4e42" : "#888", marginBottom:4 }}>
+            {allPass ? "READY TO LAUNCH" : hasFails ? `NOT READY — ${status.fail} check${status.fail>1?"s":""} failing` : "Scores not yet complete"}
+          </div>
+          <div style={{ fontSize:13, color:"#555" }}>
+            {status.pass}/{status.total} checks passing · {status.pending} pending · {status.fail} failing
+          </div>
+        </div>
+      </div>
+
+      {/* Gate grid */}
+      {["mobile","desktop"].map(strat => (
+        <div key={strat} style={{ marginBottom:24 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:T, textTransform:"uppercase", letterSpacing:1, marginBottom:12 }}>
+            {strat==="mobile" ? "📱 Mobile" : "🖥 Desktop"}
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:12 }}>
+            {CATS.map(cat => {
+              const val  = avgs[strat][cat];
+              const thr  = GATE[strat][cat];
+              const pass = val !== null ? val >= thr : null;
+              return (
+                <div key={cat} style={{
+                  background:W, borderRadius:10, padding:"16px 18px",
+                  borderLeft:`4px solid ${pass===null?"#ddd":pass?"#0cce6b":"#ff4e42"}`,
+                  boxShadow:"0 1px 3px rgba(0,0,0,0.06)",
+                }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                    <div style={{ fontWeight:700, fontSize:14, color:B }}>{CAT_ICON[cat]} {CAT_LABEL[cat]}</div>
+                    <PassFail pass={pass} />
+                  </div>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:8 }}>
+                    <span style={{ fontSize:28, fontWeight:800, color:scoreColor(val) }}>{val ?? "—"}</span>
+                    <span style={{ color:"#aaa", fontSize:13 }}>/ need ≥ {thr}</span>
+                  </div>
+                  {pass===false && (
+                    <div style={{ fontSize:12, color:"#666", lineHeight:1.5, background:"#fff8f8", borderRadius:6, padding:"8px 10px" }}>
+                      ⚠ {ISSUE_LIBRARY[cat].detail}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {hasFails > 0 && (
+        <div style={{ background:B, borderRadius:12, padding:"20px 24px", color:W }}>
+          <div style={{ color:G, fontWeight:700, marginBottom:10, fontSize:14 }}>📋 Fix Before Launch</div>
+          <ul style={{ margin:0, paddingLeft:20, fontSize:13, lineHeight:1.9, color:"rgba(255,255,255,0.85)" }}>
+            {["mobile","desktop"].flatMap(strat =>
+              CATS.filter(cat => { const v = avgs[strat][cat]; return v !== null && v < GATE[strat][cat]; })
+                .map(cat => (
+                  <li key={`${strat}-${cat}`}>
+                    <strong style={{ color:W }}>{CAT_LABEL[cat]} ({strat})</strong> — scored {avgs[strat][cat]}, needs {GATE[strat][cat]}. {ISSUE_LIBRARY[cat].detail}
+                  </li>
+                ))
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── AI INSIGHTS ──────────────────────────────────────────────────────────────
+function InsightsView({ site, avgs }) {
+  const [loading,  setLoading]  = useState(false);
+  const [insights, setInsights] = useState(null);
+  const [error,    setError]    = useState(null);
+
+  const hasScores = CATS.some(c => avgs.mobile[c] !== null || avgs.desktop[c] !== null);
+
+  const generate = useCallback(async () => {
+    setLoading(true); setError(null); setInsights(null);
+    const scoresSummary = ["mobile","desktop"].map(strat =>
+      `${strat.toUpperCase()}: ` + CATS.map(c => `${CAT_LABEL[c]}=${avgs[strat][c] ?? "N/A"}`).join(", ")
+    ).join("\n");
+    const gateResults = ["mobile","desktop"].flatMap(strat =>
+      CATS.map(cat => {
+        const v = avgs[strat][cat], thr = GATE[strat][cat];
+        return v !== null ? `${CAT_LABEL[cat]} (${strat}): ${v} vs threshold ${thr} — ${v>=thr?"PASS":"FAIL"}` : null;
+      }).filter(Boolean)
+    ).join("\n");
+
+    const prompt = `You are a web performance consultant advising a Catholic diocese in Connecticut on parish website quality. Reviewing a PageSpeed Insights audit for "${site.label}".
+
+Scores (averaged over 3 runs):
+${scoresSummary}
+
+Pre-launch gate results:
+${gateResults}
+
+Respond in JSON only (no markdown, no preamble) with this exact structure:
+{
+  "verdict": "one sentence overall verdict for a non-technical parish director",
+  "topIssues": [
+    {"title":"...","plain":"...","fix":"..."}
+  ],
+  "wins": ["..."],
+  "erikNotes": ["specific technical WordPress fix 1","fix 2","fix 3"],
+  "leadershipLine": "one sentence for a bishop or diocese director — no jargon, business/mission impact framing"
+}
+
+topIssues: failing or low scores only. "plain" = plain English for parish administrator. "fix" = what the developer should do.
+wins: what is actually working well.
+erikNotes: actionable WordPress/Bricks technical instructions for the developer.
+leadershipLine: frame around parishioner experience, evangelization reach, or reputational risk.`;
+
+    try {
+      const res  = await fetch("/.netlify/functions/insights", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role:"user", content:prompt }] }),
+      });
+      const data = await res.json();
+      const text = (data.content || []).map(b => b.text || "").join("");
+      const clean = text.replace(/```json|```/g, "").trim();
+      setInsights(JSON.parse(clean));
+    } catch (e) {
+      setError("Could not generate insights. Make sure ANTHROPIC_API_KEY is set in Netlify environment variables.");
+    }
+    setLoading(false);
+  }, [site, avgs]);
+
+  if (!site)      return <Empty msg="Select a site to generate AI insights." />;
+  if (!hasScores) return <Empty msg="Enter scores for this site first, then generate insights." />;
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+        <div>
+          <h2 style={{ ...H2, marginBottom:4 }}>AI Insights</h2>
+          <p style={{ color:T, fontSize:13, margin:0 }}>{site.label} — plain-language analysis powered by Claude</p>
+        </div>
+        <button onClick={generate} disabled={loading} style={{
+          background: loading ? "#ccc" : B, color:W, border:"none",
+          borderRadius:8, padding:"10px 22px", fontWeight:700, fontSize:14,
+          cursor: loading ? "not-allowed" : "pointer", fontFamily:"Georgia,serif",
+        }}>
+          {loading ? "Analyzing…" : insights ? "Re-analyze" : "Generate Insights"}
+        </button>
+      </div>
+
+      {error && <div style={{ color:"#ff4e42", fontSize:13, marginBottom:16, background:"#fff0ef", padding:"12px 16px", borderRadius:8 }}>{error}</div>}
+
+      {loading && (
+        <div style={{ textAlign:"center", padding:"60px 0", color:T }}>
+          <div style={{ fontSize:36, marginBottom:12 }}>🔍</div>
+          <div style={{ fontSize:14 }}>Claude is analyzing your scores…</div>
+        </div>
+      )}
+
+      {insights && (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ background:B, borderRadius:12, padding:"20px 24px", display:"flex", gap:14 }}>
+            <div style={{ fontSize:26 }}>💬</div>
+            <div>
+              <div style={{ color:G, fontWeight:700, fontSize:12, textTransform:"uppercase", letterSpacing:1, marginBottom:6 }}>Overall Assessment</div>
+              <div style={{ color:W, fontSize:15, lineHeight:1.6 }}>{insights.verdict}</div>
+            </div>
+          </div>
+
+          <div style={{ background:"#fff8e8", border:`1.5px solid ${G}`, borderRadius:12, padding:"16px 20px", display:"flex", gap:12 }}>
+            <div style={{ fontSize:22 }}>📣</div>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:T, textTransform:"uppercase", letterSpacing:1, marginBottom:5 }}>For Dcn Pat / Leadership</div>
+              <div style={{ fontSize:14, color:"#333", lineHeight:1.6, fontStyle:"italic" }}>"{insights.leadershipLine}"</div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:16 }}>
+            <div style={{ background:W, borderRadius:12, padding:"20px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+              <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:14 }}>🔴 Top Issues to Fix</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                {(insights.topIssues||[]).map((issue,i) => (
+                  <div key={i} style={{ borderLeft:"3px solid #ff4e42", paddingLeft:12 }}>
+                    <div style={{ fontWeight:700, color:B, fontSize:14, marginBottom:3 }}>{issue.title}</div>
+                    <div style={{ color:"#555", fontSize:13, lineHeight:1.5, marginBottom:4 }}>{issue.plain}</div>
+                    <div style={{ color:T, fontSize:12, fontStyle:"italic" }}>Fix: {issue.fix}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ background:W, borderRadius:12, padding:"20px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+              <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:14 }}>🟢 What's Working</div>
+              {(insights.wins||[]).map((w,i) => (
+                <div key={i} style={{ fontSize:13, color:"#444", lineHeight:1.5, display:"flex", gap:8, marginBottom:8 }}>
+                  <span style={{ color:"#0cce6b", flexShrink:0 }}>✓</span>{w}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ background:"#f0f4f8", borderRadius:12, padding:"20px 24px" }}>
+            <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:12 }}>🛠 Technical Notes for Erik</div>
+            <ol style={{ margin:0, paddingLeft:20, fontSize:13, color:"#333", lineHeight:2 }}>
+              {(insights.erikNotes||[]).map((n,i) => <li key={i}>{n}</li>)}
+            </ol>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── COMPARE VIEW ─────────────────────────────────────────────────────────────
+function CompareView({ sites, allAvgs }) {
+  const [picks, setPicks] = useState([0, Math.min(1, sites.length-1)]);
+  const [strat, setStrat] = useState("mobile");
+  if (sites.length < 2) return <Empty msg="Add at least two sites to compare." />;
+  const a = allAvgs[picks[0]];
+  const b = allAvgs[picks[1]];
+  return (
+    <div>
+      <div style={{ marginBottom:20 }}>
+        <h2 style={{ ...H2, marginBottom:4 }}>Before / After Comparison</h2>
+        <p style={{ color:T, fontSize:13, margin:0 }}>Compare any two tracked sites side by side</p>
+      </div>
+      <div style={{ display:"flex", gap:10, alignItems:"center", marginBottom:20, flexWrap:"wrap" }}>
+        <select value={picks[0]} onChange={e => setPicks([+e.target.value, picks[1]])} style={SEL}>
+          {sites.map((s,i) => <option key={i} value={i}>{s.label}</option>)}
+        </select>
+        <span style={{ color:T, fontWeight:700 }}>vs</span>
+        <select value={picks[1]} onChange={e => setPicks([picks[0], +e.target.value])} style={SEL}>
+          {sites.map((s,i) => <option key={i} value={i}>{s.label}</option>)}
+        </select>
+        <div style={{ display:"flex", gap:6 }}>
+          {["mobile","desktop"].map(s => (
+            <button key={s} onClick={() => setStrat(s)} style={{
+              padding:"7px 14px", borderRadius:7,
+              border:`2px solid ${strat===s ? B : "#ddd"}`,
+              background: strat===s ? B : W,
+              color: strat===s ? W : "#555",
+              fontWeight:700, fontSize:12, cursor:"pointer",
+            }}>{s==="mobile" ? "📱" : "🖥"}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+        {[picks[0],picks[1]].map((idx,si) => (
+          <div key={idx} style={{ background:W, borderRadius:12, padding:"20px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", borderTop:`4px solid ${si===0?"#ff6b6b":"#0cce6b"}` }}>
+            <div style={{ fontSize:11, color:T, textTransform:"uppercase", fontWeight:700, letterSpacing:1, marginBottom:3 }}>{si===0?"Before":"After"}</div>
+            <div style={{ fontSize:15, fontWeight:700, color:B, marginBottom:18 }}>{sites[idx].label}</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+              {CATS.map(cat => (
+                <div key={cat} style={{ textAlign:"center" }}>
+                  <Ring score={allAvgs[idx][strat][cat]} size={64} />
+                  <div style={{ fontSize:11, color:"#666", marginTop:5, fontWeight:600 }}>{CAT_LABEL[cat]}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background:W, borderRadius:12, padding:"20px 24px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", marginBottom:16 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:14 }}>Score Delta</div>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:14 }}>
+          <thead>
+            <tr style={{ borderBottom:`2px solid ${B}` }}>
+              <th style={THS2}>Metric</th>
+              <th style={THS2}>{sites[picks[0]].label}</th>
+              <th style={THS2}>{sites[picks[1]].label}</th>
+              <th style={THS2}>Change</th>
+              <th style={THS2}>Gate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {CATS.map((cat,i) => {
+              const va = a[strat][cat], vb = b[strat][cat];
+              const diff = va !== null && vb !== null ? vb - va : null;
+              return (
+                <tr key={cat} style={{ background: i%2===0?"#fafafa":W }}>
+                  <td style={TDS2}>{CAT_ICON[cat]} {CAT_LABEL[cat]}</td>
+                  <td style={{ ...TDS2, textAlign:"center" }}><span style={{ color:scoreColor(va), fontWeight:700 }}>{va ?? "—"}</span></td>
+                  <td style={{ ...TDS2, textAlign:"center" }}><span style={{ color:scoreColor(vb), fontWeight:700 }}>{vb ?? "—"}</span></td>
+                  <td style={{ ...TDS2, textAlign:"center" }}>
+                    {diff !== null ? <span style={{ color:diff>0?"#0cce6b":diff<0?"#ff4e42":"#999", fontWeight:700 }}>{diff>0?"▲":diff<0?"▼":"±"}{Math.abs(diff)}</span> : "—"}
+                  </td>
+                  <td style={{ ...TDS2, textAlign:"center" }}><PassFail pass={vb !== null ? vb >= GATE[strat][cat] : null} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {CATS.some(cat => { const va=a.mobile[cat],vb=b.mobile[cat]; return va!==null&&vb!==null&&vb>va; }) && (
+        <div style={{ background:B, borderRadius:12, padding:"20px 24px", display:"flex", gap:14 }}>
+          <div style={{ fontSize:24 }}>📣</div>
+          <div>
+            <div style={{ color:G, fontWeight:700, fontSize:12, textTransform:"uppercase", letterSpacing:1, marginBottom:6 }}>Leadership Pitch · Mobile Improvements</div>
+            <div style={{ color:"rgba(255,255,255,0.85)", fontSize:13, lineHeight:1.8 }}>
+              {CATS.filter(cat => { const va=a.mobile[cat],vb=b.mobile[cat]; return va!==null&&vb!==null&&vb>va; })
+                .map(cat => <span key={cat}><strong style={{ color:W }}>{CAT_LABEL[cat]}</strong> improved <strong style={{ color:G }}>+{b.mobile[cat]-a.mobile[cat]} pts</strong>. </span>)}
+              The new site delivers a measurably better experience for parishioners on mobile devices.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── HEALTH DASHBOARD ─────────────────────────────────────────────────────────
+function HealthView({ sites, allAvgs }) {
+  if (!sites.length) return <Empty msg="Add sites to see the monthly health dashboard." />;
+  const today = new Date().toLocaleDateString("en-US", { month:"long", year:"numeric" });
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:20 }}>
+        <div>
+          <h2 style={{ ...H2, marginBottom:4 }}>Monthly Health Dashboard</h2>
+          <p style={{ color:T, fontSize:13, margin:0 }}>Portfolio view — {today} · For Roger's monthly check</p>
+        </div>
+      </div>
+      <div style={{ overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, background:W, borderRadius:12, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", minWidth:500 }}>
+          <thead>
+            <tr style={{ background:B, color:W }}>
+              <th style={{ ...THS2, color:W, padding:"14px 16px" }}>Site</th>
+              {CATS.map(c => <th key={c} style={{ ...THS2, color:W, textAlign:"center", padding:"14px 10px" }}>{CAT_ICON[c]}<br /><span style={{ fontSize:10, fontWeight:400 }}>{CAT_LABEL[c]}</span></th>)}
+              <th style={{ ...THS2, color:W, textAlign:"center" }}>Gate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sites.map((site,i) => {
+              const a      = allAvgs[i];
+              const status = gateStatus(a);
+              const allP   = status.fail===0 && status.pending===0 && status.pass > 0;
+              const hasF   = status.fail > 0;
+              return (
+                <tr key={i} style={{ background:i%2===0?"#fafafa":W, borderBottom:"1px solid #eee" }}>
+                  <td style={{ ...TDS2, fontWeight:600, color:B }}>{site.label}</td>
+                  {CATS.map(cat => {
+                    const mob  = a.mobile[cat];
+                    const desk = a.desktop[cat];
+                    return (
+                      <td key={cat} style={{ ...TDS2, textAlign:"center" }}>
+                        <div style={{ fontSize:15, fontWeight:700, color:scoreColor(mob) }}>{mob ?? "—"}</div>
+                        <div style={{ fontSize:10, color:"#aaa" }}>{desk !== null ? `${desk} desk` : ""}</div>
+                      </td>
+                    );
+                  })}
+                  <td style={{ ...TDS2, textAlign:"center" }}>
+                    <span style={{
+                      padding:"3px 10px", borderRadius:20,
+                      background: allP?"#e6faf1":hasF?"#fff0ef":"#f5f5f5",
+                      color: allP?"#0cce6b":hasF?"#ff4e42":"#aaa",
+                      fontWeight:700, fontSize:11,
+                    }}>
+                      {allP ? "✓ All Pass" : hasF ? `✗ ${status.fail} fail` : "Pending"}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop:12, fontSize:12, color:T, fontStyle:"italic" }}>
+        Mobile score (top) / Desktop (bottom). Red dot = failing gate. Green = all passing.
+      </div>
+    </div>
+  );
+}
+
+// ─── EMPTY STATE ──────────────────────────────────────────────────────────────
+function Empty({ msg }) {
+  return (
+    <div style={{ textAlign:"center", padding:"60px 20px", color:T }}>
+      <div style={{ fontSize:40, marginBottom:12 }}>📋</div>
+      <div style={{ fontSize:14 }}>{msg}</div>
+    </div>
+  );
+}
+
+// ─── STYLES ───────────────────────────────────────────────────────────────────
+const H2   = { margin:0, fontSize:20, fontWeight:700, color:B };
+const THS  = { padding:"8px 12px", textAlign:"left", fontSize:11, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:0.8, borderBottom:"2px solid #eee" };
+const TDS  = { padding:"10px 12px", borderBottom:"1px solid #eee" };
+const THS2 = { padding:"10px 14px", textAlign:"left", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:0.8 };
+const TDS2 = { padding:"11px 14px", borderBottom:"1px solid #eee" };
+const SEL  = { flex:1, padding:"9px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:13, fontFamily:"Georgia,serif", color:B, outline:"none", background:W, minWidth:140 };
+
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
+const INITIAL_SITES = [
+  { label:"Old Site (stmarystfd.org)", url:"https://stmarystfd.org" },
+  { label:"New Site (Netlify Demo)", url:"https://saint-mary-stamford.netlify.app" },
+];
+
+function App() {
+  const [sites,    setSites]    = useState(() => store.get("parish-sites")   || INITIAL_SITES);
+  const [scores,   setScores]   = useState(() => store.get("parish-scores")  || INITIAL_SITES.map(() => initScores()));
+  const [selected, setSelected] = useState(0);
+  const [view,     setView]     = useState("gate");
+  const [newLabel, setNewLabel] = useState("");
+  const [newUrl,   setNewUrl]   = useState("");
+  const [adding,   setAdding]   = useState(false);
+
+  useEffect(() => { store.set("parish-sites",  sites);  }, [sites]);
+  useEffect(() => { store.set("parish-scores", scores); }, [scores]);
+
+  const handleScore = useCallback((siteIdx, strat, cat, runIdx, val) => {
+    setScores(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next[siteIdx][strat][cat][runIdx] = val;
+      return next;
+    });
+  }, []);
+
+  const addSite = () => {
+    if (!newLabel.trim()) return;
+    setSites(prev  => [...prev,  { label:newLabel.trim(), url:newUrl.trim() }]);
+    setScores(prev => [...prev, initScores()]);
+    setSelected(sites.length);
+    setNewLabel(""); setNewUrl(""); setAdding(false);
+  };
+
+  const removeSite = idx => {
+    setSites(prev  => prev.filter((_,i)  => i !== idx));
+    setScores(prev => prev.filter((_,i)  => i !== idx));
+    setSelected(0);
+  };
+
+  const allAvgs   = useMemo(() => scores.map(computeAvgs), [scores]);
+  const failCounts = useMemo(() => allAvgs.map(a => gateStatus(a).fail), [allAvgs]);
+  const totalFails = failCounts.reduce((a,b) => a+b, 0);
+
+  const NAV = [
+    { id:"gate",     label:"Pre-Launch Gate",    icon:"🚦", badge:totalFails },
+    { id:"entry",    label:"Enter Scores",        icon:"📝", badge:0 },
+    { id:"insights", label:"AI Insights",         icon:"🧠", badge:0 },
+    { id:"compare",  label:"Before / After",      icon:"⚖️", badge:0 },
+    { id:"health",   label:"Monthly Health",      icon:"📊", badge:0 },
+  ];
+
+  const SINPUT = { width:"100%", padding:"6px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,0.2)", background:"rgba(255,255,255,0.1)", color:W, fontSize:12, fontFamily:"Georgia,serif", outline:"none", boxSizing:"border-box" };
+
+  return (
+    <div style={{ fontFamily:"Georgia,serif", display:"flex", height:"100vh", background:BG, overflow:"hidden" }}>
+
+      {/* Sidebar */}
+      <div style={{ width:220, background:B, display:"flex", flexDirection:"column", flexShrink:0, padding:"20px 12px", overflowY:"auto" }}>
+        <div style={{ marginBottom:24, paddingLeft:4 }}>
+          <div style={{ color:G, fontWeight:700, fontSize:16 }}>⚡ Web Quality</div>
+          <div style={{ color:"rgba(255,255,255,0.4)", fontSize:11, marginTop:2 }}>Diocese of Bridgeport</div>
+        </div>
+
+        <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:24 }}>
+          {NAV.map(n => <NavBtn key={n.id} {...n} active={view===n.id} onClick={() => setView(n.id)} />)}
+        </div>
+
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:10, fontWeight:700, color:"rgba(255,255,255,0.35)", textTransform:"uppercase", letterSpacing:1, marginBottom:8, paddingLeft:4 }}>Sites</div>
+          {sites.map((s,i) => (
+            <div key={i} onClick={() => setSelected(i)} style={{
+              display:"flex", alignItems:"center", padding:"8px 10px", borderRadius:7,
+              background: selected===i ? "rgba(255,255,255,0.1)" : "transparent",
+              cursor:"pointer", marginBottom:2, gap:8,
+            }}>
+              <span style={{
+                width:8, height:8, borderRadius:"50%", flexShrink:0,
+                background: failCounts[i]>0 ? "#ff4e42" : CATS.some(c=>allAvgs[i].mobile[c]!==null) ? "#0cce6b" : "#555",
+              }} />
+              <span style={{ color:selected===i?W:"rgba(255,255,255,0.6)", fontSize:12, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {s.label}
+              </span>
+              {sites.length > 1 && (
+                <button onClick={e => { e.stopPropagation(); removeSite(i); }} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.3)", cursor:"pointer", fontSize:14, padding:0, lineHeight:1 }}>×</button>
+              )}
+            </div>
+          ))}
+
+          {adding ? (
+            <div style={{ padding:"8px 4px" }}>
+              <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="Site name" style={{ ...SINPUT, marginBottom:6 }} />
+              <input value={newUrl}   onChange={e => setNewUrl(e.target.value)}   placeholder="https://…"  style={{ ...SINPUT, marginBottom:8, fontFamily:"monospace", fontSize:11 }} />
+              <div style={{ display:"flex", gap:6 }}>
+                <button onClick={addSite} style={{ flex:1, background:G, border:"none", borderRadius:5, padding:"6px", color:B, fontWeight:700, fontSize:12, cursor:"pointer" }}>Add</button>
+                <button onClick={() => setAdding(false)} style={{ flex:1, background:"rgba(255,255,255,0.1)", border:"none", borderRadius:5, padding:"6px", color:W, fontSize:12, cursor:"pointer" }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setAdding(true)} style={{
+              width:"100%", padding:"8px", background:"rgba(255,255,255,0.07)",
+              border:"1px dashed rgba(255,255,255,0.2)", borderRadius:7,
+              color:"rgba(255,255,255,0.5)", fontSize:12, cursor:"pointer", marginTop:6, fontFamily:"Georgia,serif",
+            }}>+ Add Site</button>
+          )}
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ flex:1, overflow:"auto", padding:"28px 32px" }}>
+        {view==="entry"    && <div><div style={{ marginBottom:20 }}><h2 style={{ ...H2, marginBottom:4 }}>Enter Scores</h2><p style={{ color:T, fontSize:13, margin:0 }}>{sites[selected]?.label}</p></div><div style={{ background:W, borderRadius:12, padding:"24px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}><ScoreEntry scores={scores[selected]} onChange={(str,cat,ri,val) => handleScore(selected,str,cat,ri,val)} /></div></div>}
+        {view==="gate"     && <GateView     site={sites[selected]} avgs={allAvgs[selected] || computeAvgs(initScores())} />}
+        {view==="insights" && <InsightsView site={sites[selected]} avgs={allAvgs[selected] || computeAvgs(initScores())} />}
+        {view==="compare"  && <CompareView  sites={sites} allAvgs={allAvgs} />}
+        {view==="health"   && <HealthView   sites={sites} allAvgs={allAvgs} />}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

@@ -602,6 +602,341 @@ function CompareView({ sites, allAvgs }) {
   );
 }
 
+// ─── ANALYTICS VIEW ───────────────────────────────────────────────────────────
+function AnalyticsView({ site }) {
+  const [loading,  setLoading]  = useState(false);
+  const [data,     setData]     = useState(null);
+  const [error,    setError]    = useState(null);
+  const [range,    setRange]    = useState("30daysAgo");
+  const [propId,   setPropId]   = useState(site?.gaPropertyId || "");
+  const [editing,  setEditing]  = useState(!site?.gaPropertyId);
+
+  useEffect(() => {
+    setPropId(site?.gaPropertyId || "");
+    setEditing(!site?.gaPropertyId);
+    setData(null);
+  }, [site]);
+
+  if (!site) return <Empty msg="Select a site to view analytics." />;
+
+  const fetch_ = async () => {
+    if (!propId.trim()) return;
+    setLoading(true); setError(null); setData(null);
+    try {
+      const res = await fetch("/.netlify/functions/analytics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyId: propId.trim(), startDate: range, endDate: "today" }),
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      setData(json);
+      setEditing(false);
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  };
+
+  // Parse channel data
+  const channels = {};
+  let totalSessions = 0;
+  if (data?.channels?.rows) {
+    data.channels.rows.forEach(row => {
+      const ch  = row.dimensionValues[0].value;
+      const ses = parseInt(row.metricValues[0].value || 0);
+      channels[ch] = { sessions: ses, bounceRate: parseFloat(row.metricValues[2].value || 0) };
+      totalSessions += ses;
+    });
+  }
+
+  // Device split
+  const devices = {};
+  if (data?.devices?.rows) {
+    data.devices.rows.forEach(row => {
+      devices[row.dimensionValues[0].value] = parseInt(row.metricValues[0].value || 0);
+    });
+  }
+  const totalDeviceSessions = Object.values(devices).reduce((a, b) => a + b, 0);
+  const mobilePct  = totalDeviceSessions ? Math.round((devices.mobile  || 0) / totalDeviceSessions * 100) : 0;
+  const desktopPct = totalDeviceSessions ? Math.round((devices.desktop || 0) / totalDeviceSessions * 100) : 0;
+
+  // Top pages
+  const pages = data?.pages?.rows?.map(row => ({
+    path: row.dimensionValues[0].value,
+    views: parseInt(row.metricValues[0].value || 0),
+  })) || [];
+
+  // Traffic source grouping
+  const organic  = (channels["Organic Search"]?.sessions || 0);
+  const direct   = (channels["Direct"]?.sessions || 0);
+  const social   = (channels["Organic Social"]?.sessions || 0) + (channels["Paid Social"]?.sessions || 0);
+  const referral = (channels["Referral"]?.sessions || 0);
+
+  const RANGE_OPTIONS = [
+    { value: "7daysAgo",  label: "Last 7 days" },
+    { value: "30daysAgo", label: "Last 30 days" },
+    { value: "90daysAgo", label: "Last 90 days" },
+  ];
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+        <div>
+          <h2 style={{ ...H2, marginBottom:4 }}>Analytics</h2>
+          <p style={{ color:T, fontSize:13, margin:0 }}>{site.label} — powered by Google Analytics 4</p>
+        </div>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <select value={range} onChange={e => setRange(e.target.value)} style={{ ...SEL, width:"auto", padding:"7px 12px" }}>
+            {RANGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <button onClick={fetch_} disabled={loading || !propId.trim()} style={{
+            background: loading || !propId.trim() ? "#ccc" : B,
+            color:W, border:"none", borderRadius:8, padding:"8px 20px",
+            fontWeight:700, fontSize:13, cursor: loading || !propId.trim() ? "not-allowed" : "pointer",
+            fontFamily:"Georgia,serif",
+          }}>
+            {loading ? "Loading…" : data ? "Refresh" : "Pull Data"}
+          </button>
+        </div>
+      </div>
+
+      {/* Property ID entry */}
+      <div style={{ background:W, borderRadius:12, padding:"18px 22px", marginBottom:20, boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+        <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:10 }}>
+          GA4 Property ID
+        </div>
+        {editing ? (
+          <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+            <input value={propId} onChange={e => setPropId(e.target.value)}
+              placeholder="e.g. 526998807"
+              style={{ ...inputS, maxWidth:260, fontFamily:"monospace" }} />
+            <button onClick={() => setEditing(false)} style={{
+              background:G, border:"none", borderRadius:7, padding:"8px 16px",
+              fontWeight:700, fontSize:13, color:B, cursor:"pointer", fontFamily:"Georgia,serif",
+            }}>Save</button>
+          </div>
+        ) : (
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <span style={{ fontFamily:"monospace", fontSize:15, color:B, fontWeight:700 }}>{propId || "—"}</span>
+            <button onClick={() => setEditing(true)} style={{
+              background:"transparent", border:`1px solid #ddd`, borderRadius:6,
+              padding:"4px 12px", fontSize:12, color:T, cursor:"pointer", fontFamily:"Georgia,serif",
+            }}>Edit</button>
+          </div>
+        )}
+        <div style={{ fontSize:11, color:T, marginTop:6, fontStyle:"italic" }}>
+          Find this in GA4 Admin → Property Settings. Add the service account email as a Viewer to each property.
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ background:"#fff0ef", border:"1.5px solid #ff4e42", borderRadius:10, padding:"14px 18px", marginBottom:20, fontSize:13, color:"#c0392b" }}>
+          ⚠ {error}
+        </div>
+      )}
+
+      {loading && (
+        <div style={{ textAlign:"center", padding:"60px 0", color:T }}>
+          <div style={{ fontSize:36, marginBottom:12 }}>📊</div>
+          <div style={{ fontSize:14 }}>Pulling data from Google Analytics…</div>
+        </div>
+      )}
+
+      {data && (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+
+          {/* Top metrics row */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+            {[
+              { label:"Total Sessions", value: totalSessions.toLocaleString(), icon:"👥" },
+              { label:"Mobile Traffic", value: `${mobilePct}%`, icon:"📱" },
+              { label:"Desktop Traffic", value: `${desktopPct}%`, icon:"🖥" },
+              { label:"Organic Search", value: totalSessions ? `${Math.round(organic/totalSessions*100)}%` : "—", icon:"🔍" },
+            ].map((m,i) => (
+              <div key={i} style={{ background:W, borderRadius:10, padding:"18px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", textAlign:"center" }}>
+                <div style={{ fontSize:24, marginBottom:6 }}>{m.icon}</div>
+                <div style={{ fontSize:22, fontWeight:800, color:B, marginBottom:4 }}>{m.value}</div>
+                <div style={{ fontSize:11, color:T, textTransform:"uppercase", letterSpacing:0.8, fontWeight:700 }}>{m.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Traffic sources + Top pages */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+
+            {/* Traffic sources */}
+            <div style={{ background:W, borderRadius:12, padding:"20px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+              <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:16 }}>
+                🌐 Where Traffic Comes From
+              </div>
+              {[
+                { label:"Organic Search", value:organic,  color:"#0cce6b", tip:"People finding you on Google" },
+                { label:"Direct",         value:direct,   color:B,         tip:"Typed URL or bookmarked" },
+                { label:"Social",         value:social,   color:G,         tip:"Facebook, Instagram, etc." },
+                { label:"Referral",       value:referral, color:"#ffa400", tip:"Links from other sites" },
+              ].map((src,i) => {
+                const pct = totalSessions ? Math.round(src.value / totalSessions * 100) : 0;
+                return (
+                  <div key={i} style={{ marginBottom:14 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                      <span style={{ fontSize:13, fontWeight:600, color:"#333" }}>{src.label}</span>
+                      <span style={{ fontSize:13, fontWeight:700, color:src.color }}>{src.value.toLocaleString()} <span style={{ color:"#aaa", fontWeight:400 }}>({pct}%)</span></span>
+                    </div>
+                    <div style={{ background:"#eee", borderRadius:4, height:6 }}>
+                      <div style={{ width:`${pct}%`, height:6, background:src.color, borderRadius:4, transition:"width 0.6s ease" }} />
+                    </div>
+                    <div style={{ fontSize:11, color:T, marginTop:3, fontStyle:"italic" }}>{src.tip}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Top pages */}
+            <div style={{ background:W, borderRadius:12, padding:"20px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+              <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:16 }}>
+                📄 Top Pages
+              </div>
+              {pages.length === 0 && <div style={{ color:T, fontSize:13 }}>No page data available.</div>}
+              {pages.map((p,i) => {
+                const maxViews = pages[0]?.views || 1;
+                const pct = Math.round(p.views / maxViews * 100);
+                return (
+                  <div key={i} style={{ marginBottom:14 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                      <span style={{ fontSize:12, fontFamily:"monospace", color:"#333", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"70%" }}>{p.path}</span>
+                      <span style={{ fontSize:13, fontWeight:700, color:B }}>{p.views.toLocaleString()}</span>
+                    </div>
+                    <div style={{ background:"#eee", borderRadius:4, height:5 }}>
+                      <div style={{ width:`${pct}%`, height:5, background:B, borderRadius:4 }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Device split bar */}
+          <div style={{ background:W, borderRadius:12, padding:"20px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+            <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1, marginBottom:14 }}>
+              📱 Device Split
+            </div>
+            <div style={{ display:"flex", borderRadius:8, overflow:"hidden", height:32, marginBottom:10 }}>
+              {Object.entries(devices).map(([dev, ses], i) => {
+                const pct = totalDeviceSessions ? Math.round(ses / totalDeviceSessions * 100) : 0;
+                const colors = { mobile:"#0cce6b", desktop:B, tablet:G };
+                return pct > 0 ? (
+                  <div key={i} style={{ width:`${pct}%`, background: colors[dev] || T, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                    <span style={{ color:W, fontSize:12, fontWeight:700 }}>{pct}%</span>
+                  </div>
+                ) : null;
+              })}
+            </div>
+            <div style={{ display:"flex", gap:16 }}>
+              {Object.entries(devices).map(([dev, ses], i) => {
+                const pct = totalDeviceSessions ? Math.round(ses / totalDeviceSessions * 100) : 0;
+                const colors = { mobile:"#0cce6b", desktop:B, tablet:G };
+                return (
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <div style={{ width:10, height:10, borderRadius:2, background: colors[dev] || T }} />
+                    <span style={{ fontSize:12, color:"#555", textTransform:"capitalize" }}>{dev} ({pct}%)</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* AI narrative */}
+          <AIAnalyticsNarrative site={site} data={{ totalSessions, mobilePct, desktopPct, organic, direct, social, referral, pages }} range={range} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AIAnalyticsNarrative({ site, data, range }) {
+  const [loading,   setLoading]   = useState(false);
+  const [narrative, setNarrative] = useState(null);
+  const [error,     setError]     = useState(null);
+
+  const generate = async () => {
+    setLoading(true); setError(null); setNarrative(null);
+    const rangeLabel = range === "7daysAgo" ? "last 7 days" : range === "30daysAgo" ? "last 30 days" : "last 90 days";
+    const prompt = `You are a web analytics consultant advising a Catholic parish on their website performance. Analyze this Google Analytics data for "${site.label}" over the ${rangeLabel}:
+
+- Total sessions: ${data.totalSessions}
+- Mobile traffic: ${data.mobilePct}%
+- Desktop traffic: ${data.desktopPct}%
+- Organic search sessions: ${data.organic} (${data.totalSessions ? Math.round(data.organic/data.totalSessions*100) : 0}%)
+- Direct traffic sessions: ${data.direct} (${data.totalSessions ? Math.round(data.direct/data.totalSessions*100) : 0}%)
+- Social media sessions: ${data.social}
+- Referral sessions: ${data.referral}
+- Top pages: ${data.pages.map(p => `${p.path} (${p.views} views)`).join(", ")}
+
+Respond in JSON only (no markdown, no preamble):
+{
+  "summary": "2-3 sentence plain English summary for a parish director",
+  "wins": ["positive finding 1", "positive finding 2"],
+  "concerns": ["concern 1 if any", "concern 2 if any"],
+  "actions": ["specific action 1", "specific action 2"],
+  "leadershipLine": "one sentence for diocesan leadership — mission/evangelization framing"
+}`;
+
+    try {
+      const res  = await fetch("/.netlify/functions/insights", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ messages:[{ role:"user", content:prompt }] }),
+      });
+      const json = await res.json();
+      const text = (json.content||[]).map(b => b.text||"").join("");
+      setNarrative(JSON.parse(text.replace(/```json|```/g,"").trim()));
+    } catch(e) {
+      setError("Could not generate narrative.");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ background:W, borderRadius:12, padding:"20px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:1 }}>🧠 AI Narrative</div>
+        <button onClick={generate} disabled={loading} style={{
+          background: loading ? "#ccc" : B, color:W, border:"none", borderRadius:7,
+          padding:"7px 16px", fontWeight:700, fontSize:12, cursor: loading ? "not-allowed" : "pointer",
+          fontFamily:"Georgia,serif",
+        }}>
+          {loading ? "Analyzing…" : narrative ? "Refresh" : "Generate Narrative"}
+        </button>
+      </div>
+      {error && <div style={{ color:"#ff4e42", fontSize:13 }}>{error}</div>}
+      {loading && <div style={{ color:T, fontSize:13, fontStyle:"italic" }}>Claude is reading your analytics…</div>}
+      {narrative && (
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ fontSize:14, color:"#333", lineHeight:1.7 }}>{narrative.summary}</div>
+          <div style={{ background:"#fff8e8", border:`1.5px solid ${G}`, borderRadius:8, padding:"12px 16px", fontSize:13, color:"#333", fontStyle:"italic" }}>
+            📣 <strong>For leadership:</strong> "{narrative.leadershipLine}"
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+            {[
+              { label:"✅ Wins", items:narrative.wins, color:"#e6faf1" },
+              { label:"⚠ Watch", items:narrative.concerns, color:"#fff8f8" },
+              { label:"📋 Actions", items:narrative.actions, color:"#f0f4f8" },
+            ].map((col,i) => (
+              <div key={i} style={{ background:col.color, borderRadius:8, padding:"12px" }}>
+                <div style={{ fontSize:11, fontWeight:700, color:B, textTransform:"uppercase", letterSpacing:0.8, marginBottom:8 }}>{col.label}</div>
+                {(col.items||[]).map((item,j) => (
+                  <div key={j} style={{ fontSize:12, color:"#444", lineHeight:1.6, marginBottom:4 }}>• {item}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── HEALTH DASHBOARD ─────────────────────────────────────────────────────────
 function HealthView({ sites, allAvgs }) {
   if (!sites.length) return <Empty msg="Add sites to see the monthly health dashboard." />;
@@ -681,7 +1016,8 @@ const THS  = { padding:"8px 12px", textAlign:"left", fontSize:11, fontWeight:700
 const TDS  = { padding:"10px 12px", borderBottom:"1px solid #eee" };
 const THS2 = { padding:"10px 14px", textAlign:"left", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:0.8 };
 const TDS2 = { padding:"11px 14px", borderBottom:"1px solid #eee" };
-const SEL  = { flex:1, padding:"9px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:13, fontFamily:"Georgia,serif", color:B, outline:"none", background:W, minWidth:140 };
+const SEL    = { flex:1, padding:"9px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:13, fontFamily:"Georgia,serif", color:B, outline:"none", background:W, minWidth:140 };
+const inputS = { width:"100%", padding:"8px 11px", borderRadius:7, border:"1.5px solid #ddd", fontSize:14, boxSizing:"border-box", outline:"none", fontFamily:"Georgia,serif" };
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 const INITIAL_SITES = [
@@ -728,11 +1064,12 @@ function App() {
   const totalFails = failCounts.reduce((a,b) => a+b, 0);
 
   const NAV = [
-    { id:"gate",     label:"Pre-Launch Gate",    icon:"🚦", badge:totalFails },
-    { id:"entry",    label:"Enter Scores",        icon:"📝", badge:0 },
-    { id:"insights", label:"AI Insights",         icon:"🧠", badge:0 },
-    { id:"compare",  label:"Before / After",      icon:"⚖️", badge:0 },
-    { id:"health",   label:"Monthly Health",      icon:"📊", badge:0 },
+    { id:"gate",      label:"Pre-Launch Gate",   icon:"🚦", badge:totalFails },
+    { id:"entry",     label:"Enter Scores",      icon:"📝", badge:0 },
+    { id:"insights",  label:"AI Insights",       icon:"🧠", badge:0 },
+    { id:"analytics", label:"Analytics",         icon:"📈", badge:0 },
+    { id:"compare",   label:"Before / After",    icon:"⚖️", badge:0 },
+    { id:"health",    label:"Monthly Health",    icon:"📊", badge:0 },
   ];
 
   const SINPUT = { width:"100%", padding:"6px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,0.2)", background:"rgba(255,255,255,0.1)", color:W, fontSize:12, fontFamily:"Georgia,serif", outline:"none", boxSizing:"border-box" };
@@ -796,6 +1133,7 @@ function App() {
         {view==="entry"    && <div><div style={{ marginBottom:20 }}><h2 style={{ ...H2, marginBottom:4 }}>Enter Scores</h2><p style={{ color:T, fontSize:13, margin:0 }}>{sites[selected]?.label}</p></div><div style={{ background:W, borderRadius:12, padding:"24px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}><ScoreEntry scores={scores[selected]} onChange={(str,cat,ri,val) => handleScore(selected,str,cat,ri,val)} /></div></div>}
         {view==="gate"     && <GateView     site={sites[selected]} avgs={allAvgs[selected] || computeAvgs(initScores())} />}
         {view==="insights" && <InsightsView site={sites[selected]} avgs={allAvgs[selected] || computeAvgs(initScores())} />}
+        {view==="analytics" && <AnalyticsView site={sites[selected]} /> }
         {view==="compare"  && <CompareView  sites={sites} allAvgs={allAvgs} />}
         {view==="health"   && <HealthView   sites={sites} allAvgs={allAvgs} />}
       </div>

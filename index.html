@@ -160,6 +160,26 @@ function NavBtn({ label, icon, active, onClick, badge }) {
 // ─── SCORE ENTRY ──────────────────────────────────────────────────────────────
 function ScoreEntry({ scores, onChange }) {
   const [strat, setStrat] = useState("mobile");
+
+  const run1Complete = CATS.every(cat => scores[strat][cat][0] !== "");
+
+  const copyRun1ToAll = () => {
+    CATS.forEach(cat => {
+      const val = scores[strat][cat][0];
+      for (let ri = 1; ri < RUNS; ri++) {
+        onChange(strat, cat, ri, val);
+      }
+    });
+  };
+
+  const clearAll = () => {
+    CATS.forEach(cat => {
+      for (let ri = 0; ri < RUNS; ri++) {
+        onChange(strat, cat, ri, "");
+      }
+    });
+  };
+
   return (
     <div>
       <div style={{ display:"flex", gap:8, marginBottom:20 }}>
@@ -175,15 +195,41 @@ function ScoreEntry({ scores, onChange }) {
           </button>
         ))}
       </div>
-      <div style={{ fontSize:11, color:T, marginBottom:12, fontStyle:"italic" }}>
-        Run each at <a href="https://pagespeed.web.dev" target="_blank" rel="noreferrer" style={{ color:B }}>pagespeed.web.dev</a> 3 times and enter the 4 scores per run.
+
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+        <div style={{ fontSize:11, color:T, fontStyle:"italic" }}>
+          Enter Run 1 scores from <a href="https://pagespeed.web.dev" target="_blank" rel="noreferrer" style={{ color:B }}>pagespeed.web.dev</a>, then copy to runs 2 &amp; 3 or enter manually.
+        </div>
+        <div style={{ display:"flex", gap:8, flexShrink:0, marginLeft:16 }}>
+          <button
+            onClick={copyRun1ToAll}
+            disabled={!run1Complete}
+            title="Copy Run 1 scores to Runs 2 and 3"
+            style={{
+              padding:"6px 14px", borderRadius:6, fontSize:12, fontWeight:700, cursor: run1Complete ? "pointer" : "not-allowed",
+              background: run1Complete ? G : "#eee",
+              color: run1Complete ? B : "#aaa",
+              border:"none", whiteSpace:"nowrap",
+            }}>
+            Copy Run 1 → 2 &amp; 3
+          </button>
+          <button onClick={clearAll} style={{
+            padding:"6px 12px", borderRadius:6, fontSize:12, fontWeight:700, cursor:"pointer",
+            background:"transparent", color:"#aaa", border:"1px solid #ddd",
+          }}>Clear</button>
+        </div>
       </div>
+
       <div style={{ overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, minWidth:500 }}>
           <thead>
             <tr>
               <th style={THS}>Category</th>
-              {Array(RUNS).fill(0).map((_,i) => <th key={i} style={THS}>Run {i+1}</th>)}
+              {Array(RUNS).fill(0).map((_,i) => (
+                <th key={i} style={{ ...THS, color: i===0 ? B : "#aaa" }}>
+                  Run {i+1}{i > 0 ? " *" : ""}
+                </th>
+              ))}
               <th style={{ ...THS, color:G }}>Avg</th>
               <th style={THS}>Threshold</th>
               <th style={THS}>Status</th>
@@ -199,7 +245,7 @@ function ScoreEntry({ scores, onChange }) {
                 <tr key={cat} style={{ background: ci%2===0 ? "#fafafa" : W }}>
                   <td style={{ ...TDS, fontWeight:600 }}>{CAT_ICON[cat]} {CAT_LABEL[cat]}</td>
                   {runs.map((val,ri) => (
-                    <td key={ri} style={TDS}>
+                    <td key={ri} style={{ ...TDS, background: ri > 0 && val !== "" && val === runs[0] ? "#fffdf5" : "inherit" }}>
                       <input type="number" min="0" max="100" value={val}
                         onChange={e => onChange(strat, cat, ri, e.target.value)}
                         style={{
@@ -208,6 +254,7 @@ function ScoreEntry({ scores, onChange }) {
                           fontSize:14, fontWeight:700, textAlign:"center",
                           color: val!=="" ? scoreColor(val) : "#bbb", outline:"none",
                           fontFamily:"monospace",
+                          opacity: ri > 0 && val !== "" && val === runs[0] ? 0.7 : 1,
                         }} placeholder="—" />
                     </td>
                   ))}
@@ -222,6 +269,7 @@ function ScoreEntry({ scores, onChange }) {
           </tbody>
         </table>
       </div>
+      <div style={{ fontSize:11, color:"#bbb", marginTop:8, fontStyle:"italic" }}>* Runs 2 &amp; 3 copied from Run 1 by default — click any cell to override.</div>
     </div>
   );
 }
